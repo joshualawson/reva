@@ -1,0 +1,21 @@
+name: sphyrix
+on:
+  push:
+    branches: [sphyrix]
+  pull_request:
+    branches: [sphyrix]
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: build
+        run: go build ./...
+      - name: posixfs unit tests
+        run: go test ./pkg/storage/fs/posix/... ./pkg/storage/pkg/decomposedfs/usermapper/...
+      # setfsuid needs CAP_SETUID; the runner's root has it
+      - name: posixfs ownership tests (root)
+        run: sudo -E "$(command -v go)" test -tags ownership -run 'Ownership' ./pkg/storage/fs/posix/...
