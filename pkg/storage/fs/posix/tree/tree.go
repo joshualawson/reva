@@ -203,6 +203,11 @@ func New(lu node.PathLookup, bs node.Blobstore, um usermapper.Mapper, trashbin *
 			if err != nil {
 				return nil, err
 			}
+		case "smbnotify":
+			t.watcher, err = NewSMBNotifyWatcher(context.TODO(), t, o.SMBNotify, o.WatchRoot, log)
+			if err != nil {
+				return nil, err
+			}
 		default:
 			t.watcher, err = NewWatcher(t, o, log)
 			if err != nil {

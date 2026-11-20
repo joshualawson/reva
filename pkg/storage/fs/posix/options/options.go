@@ -49,8 +49,25 @@ type Options struct {
 
 	NatsWatcher NatsWatcherConfig `mapstructure:"natswatcher"`
 
+	SMBNotify SMBNotifyConfig `mapstructure:"smbnotify"`
+
 	// InotifyWatcher specific options
 	InotifyStatsFrequency time.Duration `mapstructure:"inotify_stats_frequency"`
+}
+
+// SMBNotifyConfig connects the smbnotify watcher to the SMB server that serves the same tree as the root
+type SMBNotifyConfig struct {
+	// host:port of the SMB server, e.g. nas.example.com:445
+	Address string `mapstructure:"address"`
+	// the share and the directory inside it that correspond to watch_root (empty = the share root)
+	Share string `mapstructure:"share"`
+	Path  string `mapstructure:"path"`
+	// the account the watcher authenticates as; it only ever reads directory change notifications
+	Username string `mapstructure:"username"`
+	Password string `mapstructure:"password"`
+	Domain   string `mapstructure:"domain"`
+	// wait between reconnect attempts; 0 uses 5s
+	ReconnectDelay time.Duration `mapstructure:"reconnect_delay"`
 }
 
 // NatsWatcherConfig is the configuration needed for a NATS watcher event stream.

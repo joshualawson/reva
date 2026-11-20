@@ -490,8 +490,9 @@ func (lu *Lookup) GenerateSpaceID(spaceType string, owner *user.User) (string, e
 					return "", err
 				}
 			}
+			// a directory without metadata is not a space yet; CreateStorageSpace decides whether to adopt or refuse it
 			if len(spaceID) == 0 {
-				return "", errtypes.InternalError("encountered empty space id on disk")
+				return uuid.New().String(), nil
 			}
 			return spaceID, nil
 		}
