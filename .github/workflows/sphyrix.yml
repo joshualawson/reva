@@ -12,6 +12,9 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      # the inotify watcher tests shell out to inotifywait
+      - name: test dependencies
+        run: sudo apt-get update -q && sudo apt-get install -y -q inotify-tools
       - name: build
         run: go build ./...
       - name: posixfs unit tests
