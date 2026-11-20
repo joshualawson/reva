@@ -28,7 +28,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"syscall"
 	"time"
 
 	provider "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
@@ -135,6 +134,10 @@ func New(o *options.Options, stream events.Stream, cache, historyCache *idcache.
 	if o.FileMetadataCache.Store == "noop" {
 		return nil, fmt.Errorf("the posix driver requires a file metadata cache")
 	}
+	// setfsuid to arbitrary users needs CAP_SETUID, and the files are served by a root-squash-free export anyway
+	if o.UseSpaceOwner && os.Geteuid() != 0 {
+		return nil, fmt.Errorf("use_space_owner requires the process to run as root, it runs as uid %d", os.Geteuid())
+	}
 	if err := prefixes.SetOcPrefix(o.MetadataPrefix); err != nil {
 		return nil, err
 	}
@@ -225,40 +228,7 @@ func New(o *options.Options, stream events.Stream, cache, historyCache *idcache.
 		return nil, err
 	}
 
-	hooks := []middleware.Hook{}
-	if o.UseSpaceGroups {
-		resolveSpaceHook := func(methodName string, ctx context.Context, spaceID string) (context.Context, middleware.UnHook, error) {
-			if spaceID == "" {
-				return ctx, nil, nil
-			}
-
-			spaceRoot := lu.InternalPath(spaceID, spaceID)
-			fi, err := os.Stat(spaceRoot)
-			if err != nil {
-				return ctx, nil, err
-			}
-
-			ctx = context.WithValue(ctx, decomposedfs.CtxKeySpaceGID, fi.Sys().(*syscall.Stat_t).Gid)
-
-			return ctx, nil, err
-		}
-		scopeSpaceGroupHook := func(methodName string, ctx context.Context, spaceID string) (context.Context, middleware.UnHook, error) {
-			spaceGID, ok := ctx.Value(decomposedfs.CtxKeySpaceGID).(uint32)
-			if !ok {
-				return ctx, nil, nil
-			}
-
-			unscope, err := um.ScopeUserByIds(-1, int(spaceGID))
-			if err != nil {
-				return ctx, nil, errors.Wrap(err, "failed to scope user")
-			}
-
-			return ctx, unscope, nil
-		}
-		hooks = append(hooks, resolveSpaceHook, scopeSpaceGroupHook)
-	}
-
-	mw := middleware.NewFS(dfs, hooks...)
+	mw := middleware.NewFS(dfs, tree.SpaceScopeHooks(lu, um, o)...)
 	fs.FS = mw
 	if onDemand, ok := dfs.(revisioncleanup.OnDemand); ok {
 		fs.revisions = onDemand

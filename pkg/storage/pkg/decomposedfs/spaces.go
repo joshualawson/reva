@@ -96,9 +96,13 @@ func (fs *Decomposedfs) CreateStorageSpace(ctx context.Context, req *provider.Cr
 			rootPath = filepath.Join(fs.o.Root, templates.WithSpacePropertiesAndUser(u, req.Type, req.Name, spaceID, fs.o.GeneralSpacePathTemplate))
 		}
 	}
+	adopted := false
 	if rootPath != "" {
 		if _, err := os.Stat(rootPath); err == nil {
-			return nil, errtypes.AlreadyExists("decomposedfs: spaces: space already exists")
+			if !fs.o.AdoptExistingSpaceRoots || fs.spaceRootHasMetadata(ctx, rootPath) {
+				return nil, errtypes.AlreadyExists("decomposedfs: spaces: space already exists")
+			}
+			adopted = true
 		}
 	}
 
@@ -134,12 +138,29 @@ func (fs *Decomposedfs) CreateStorageSpace(ctx context.Context, req *provider.Cr
 	}
 
 	// 770 permissions for the space
-	if err := os.Mkdir(rootPath, 0770); err != nil {
-		if os.IsExist(err) {
-			// Someone has created the space in the meantime. Abort.
-			return nil, errtypes.AlreadyExists(spaceID)
+	if !adopted {
+		if err := os.Mkdir(rootPath, 0770); err != nil {
+			if os.IsExist(err) {
+				// Someone has created the space in the meantime. Abort.
+				return nil, errtypes.AlreadyExists(spaceID)
+			}
+			return nil, errors.Wrap(err, fmt.Sprintf("Decomposedfs: error creating space %s", rootPath))
 		}
-		return nil, errors.Wrap(err, fmt.Sprintf("Decomposedfs: error creating space %s", rootPath))
+		// a brand new root belongs to its owner, like a home directory created by useradd
+		if fs.o.UseSpaceOwner && req.GetOwner().GetUidNumber() > 0 {
+			if err := os.Lchown(rootPath, int(req.GetOwner().GetUidNumber()), int(req.GetOwner().GetGidNumber())); err != nil {
+				return nil, errors.Wrap(err, fmt.Sprintf("Decomposedfs: error setting the owner of space %s", rootPath))
+			}
+		}
+	}
+
+	// from here on the root's metadata and internal directories are written as the owner of the root
+	if fs.o.UseSpaceOwner {
+		unscope, err := fs.scopeToPath(rootPath)
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = unscope() }()
 	}
 
 	// Store id in cache
@@ -1350,4 +1371,30 @@ func canDeleteSpace(ctx context.Context, spaceID string, typ string, purge bool,
 	}
 
 	return errtypes.PermissionDenied(fmt.Sprintf("user is not allowed to delete space %s", n.GetID()))
+}
+
+// spaceRootHasMetadata reports whether the directory already carries a space id, i.e. is a known space root
+func (fs *Decomposedfs) spaceRootHasMetadata(ctx context.Context, path string) bool {
+	spaceID, _, _, _, err := fs.lu.MetadataBackend().IdentifyPath(ctx, path)
+	return err == nil && len(spaceID) > 0
+}
+
+// scopeToPath switches the calling goroutine to the uid and gid that own path until the returned function runs
+func (fs *Decomposedfs) scopeToPath(path string) (func() error, error) {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return nil, errors.Wrapf(err, "Decomposedfs: could not stat %s", path)
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return nil, errors.New("Decomposedfs: no unix ownership information for " + path)
+	}
+	unscope, err := fs.um.ScopeUserByIds(int(st.Uid), int(st.Gid))
+	if err != nil {
+		return nil, errors.Wrapf(err, "Decomposedfs: could not act as the owner of %s", path)
+	}
+	if unscope == nil {
+		unscope = func() error { return nil }
+	}
+	return unscope, nil
 }

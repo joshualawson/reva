@@ -59,6 +59,7 @@ import (
 	"github.com/opencloud-eu/reva/v3/pkg/storage/pkg/decomposedfs/permissions"
 	"github.com/opencloud-eu/reva/v3/pkg/storage/pkg/decomposedfs/permissions/mocks"
 	"github.com/opencloud-eu/reva/v3/pkg/storage/pkg/decomposedfs/usermapper"
+	"github.com/opencloud-eu/reva/v3/pkg/storage/utils/middleware"
 	"github.com/opencloud-eu/reva/v3/pkg/storagespace"
 	"github.com/opencloud-eu/reva/v3/tests/helpers"
 )
@@ -112,6 +113,7 @@ func NewInProcessNATSServer() (conn *natsclient.Conn, js jetstream.JetStream, cl
 type TestEnv struct {
 	Root                 string
 	Fs                   *decomposedfs.Decomposedfs
+	ScopedFS             storage.FS // Fs behind the same space-scope hooks posix.New installs
 	Tree                 *tree.Tree
 	Permissions          *mocks.PermissionsChecker
 	Blobstore            *nodemocks.Blobstore
@@ -165,8 +167,6 @@ const (
 // The default config can be overridden by providing the strings to override
 // via map as a parameter
 func NewTestEnv(config map[string]interface{}) (*TestEnv, error) {
-	um := &usermapper.NullMapper{}
-
 	tmpRoot, err := helpers.TempDir("reva-unit-tests-*-root")
 	if err != nil {
 		return nil, err
@@ -190,6 +190,15 @@ func NewTestEnv(config map[string]interface{}) (*TestEnv, error) {
 	o, err := options.New(defaultConfig)
 	if err != nil {
 		return nil, err
+	}
+
+	// acting as the space owner is only possible as root; everything else runs with the no-op mapper
+	var um usermapper.Mapper = &usermapper.NullMapper{}
+	if o.UseSpaceOwner && os.Geteuid() == 0 {
+		um, err = usermapper.NewUnixMapper()
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	owner := &userpb.User{
@@ -309,6 +318,8 @@ func NewTestEnv(config map[string]interface{}) (*TestEnv, error) {
 	if err != nil {
 		return nil, err
 	}
+	// before the variable below shadows the package
+	scopeHooks := tree.SpaceScopeHooks(lu, um, o)
 	tree, err := tree.New(lu, bs, um, tb, permissions.Permissions{}, o, nil, c, &logger)
 	if err != nil {
 		return nil, err
@@ -336,6 +347,7 @@ func NewTestEnv(config map[string]interface{}) (*TestEnv, error) {
 	env := &TestEnv{
 		Root:                 tmpRoot,
 		Fs:                   tmpFs,
+		ScopedFS:             middleware.NewFS(fs, scopeHooks...),
 		Tree:                 tree,
 		Lookup:               lu,
 		Permissions:          pmock,

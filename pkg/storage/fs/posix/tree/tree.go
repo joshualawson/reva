@@ -27,7 +27,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -53,7 +52,6 @@ import (
 	"github.com/opencloud-eu/reva/v3/pkg/storage/fs/posix/trashbin"
 	"github.com/opencloud-eu/reva/v3/pkg/storage/fs/posix/tree/assimilation"
 	"github.com/opencloud-eu/reva/v3/pkg/storage/fs/posix/watcher/natswatcher"
-	"github.com/opencloud-eu/reva/v3/pkg/storage/pkg/decomposedfs"
 	"github.com/opencloud-eu/reva/v3/pkg/storage/pkg/decomposedfs/metadata"
 	"github.com/opencloud-eu/reva/v3/pkg/storage/pkg/decomposedfs/metadata/prefixes"
 	"github.com/opencloud-eu/reva/v3/pkg/storage/pkg/decomposedfs/node"
@@ -349,6 +347,28 @@ func (t *Tree) Setup() error {
 		return err
 	}
 
+	if t.options.UseSpaceOwner {
+		return t.setupForSpaceOwners()
+	}
+	return nil
+}
+
+// setupForSpaceOwners makes the shared directories usable by the uids the driver acts as
+func (t *Tree) setupForSpaceOwners() error {
+	// owners must be able to traverse the root to reach their space
+	fi, err := os.Stat(t.options.Root)
+	if err != nil {
+		return err
+	}
+	if fi.Mode().Perm()&0o011 == 0 {
+		if err := os.Chmod(t.options.Root, fi.Mode().Perm()|0o011); err != nil {
+			return errors.Wrapf(err, "root %q is not traversable by space owners and could not be made so", t.options.Root)
+		}
+	}
+	// uploads in progress are written as the owner before they move into the space, like /tmp
+	if err := os.Chmod(t.options.UploadDirectory, 0o1777); err != nil {
+		return errors.Wrapf(err, "could not make the upload directory %q writable for space owners", t.options.UploadDirectory)
+	}
 	return nil
 }
 
@@ -651,14 +671,11 @@ func (t *Tree) listFolder(ctx context.Context, n *node.Node, forUser bool) ([]*n
 	for i := 0; i < numWorkers; i++ {
 		g.Go(func() error {
 			// switch user if necessary
-			spaceGID, ok := ctx.Value(decomposedfs.CtxKeySpaceGID).(uint32)
-			if ok {
-				unscope, err := t.userMapper.ScopeUserByIds(-1, int(spaceGID))
-				if err != nil {
-					return errors.Wrap(err, "failed to scope user")
-				}
-				defer func() { _ = unscope() }()
+			unscope, err := scopeFromContext(ctx, t.userMapper)
+			if err != nil {
+				return err
 			}
+			defer func() { _ = unscope() }()
 
 			for name := range work {
 				path := filepath.Join(dir, name)
@@ -852,16 +869,15 @@ func (t *Tree) ScopeToSpace(ctx context.Context, spaceID string) (context.Contex
 	if !t.options.UseSpaceGroups {
 		return ctx, func() error { return nil }, nil
 	}
-	fi, err := os.Stat(t.lookup.InternalPath(spaceID, spaceID))
+	ctx, err := withOwnerIDs(ctx, t.options, t.lookup.InternalPath(spaceID, spaceID))
 	if err != nil {
-		return ctx, nil, errors.Wrapf(err, "could not stat the root of space %q", spaceID)
+		return ctx, nil, err
 	}
-	gid := fi.Sys().(*syscall.Stat_t).Gid
-	unscope, err := t.userMapper.ScopeUserByIds(-1, int(gid))
+	unscope, err := scopeFromContext(ctx, t.userMapper)
 	if err != nil {
-		return ctx, nil, errors.Wrap(err, "failed to scope user")
+		return ctx, nil, err
 	}
-	return context.WithValue(ctx, decomposedfs.CtxKeySpaceGID, gid), unscope, nil
+	return ctx, unscope, nil
 }
 
 // BuildSpaceIDIndexEntry returns the entry for the space id index

@@ -56,6 +56,12 @@ type Options struct {
 	// the upload directory where uploads in progress are stored
 	UploadDirectory string `mapstructure:"upload_directory"`
 
+	// posix only: run every operation in a space as the uid and gid of its root, so new files belong to the owner on disk
+	UseSpaceOwner bool `mapstructure:"use_space_owner"`
+
+	// posix only: adopt an existing directory without space metadata as a new personal space root instead of refusing
+	AdoptExistingSpaceRoots bool `mapstructure:"adopt_existing_space_roots"`
+
 	// UserLayout describes the relative path from the storage's root node to the users home node.
 	UserLayout string `mapstructure:"user_layout"`
 

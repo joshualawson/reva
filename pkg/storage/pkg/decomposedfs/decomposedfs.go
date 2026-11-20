@@ -76,7 +76,17 @@ type CtxKey int
 
 const (
 	CtxKeySpaceGID CtxKey = iota
+	// the uid of the space root; only set with use_space_owner
+	CtxKeySpaceUID
 )
+
+// SpaceUIDFromContext returns the uid to act as for the space in ctx, or -1 to keep the current one
+func SpaceUIDFromContext(ctx context.Context) int {
+	if uid, ok := ctx.Value(CtxKeySpaceUID).(uint32); ok {
+		return int(uid)
+	}
+	return -1
+}
 
 var (
 	tracer trace.Tracer

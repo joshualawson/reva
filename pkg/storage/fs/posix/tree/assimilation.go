@@ -30,7 +30,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -404,20 +403,6 @@ func (t *Tree) findSpaceId(path string) (string, error) {
 
 		spaceID, _, err := t.lookup.IDsForPath(context.Background(), spaceCandidate)
 		if err == nil && len(spaceID) > 0 {
-			if t.options.UseSpaceGroups {
-				// set the uid and gid for the space
-				fi, err := os.Stat(spaceCandidate)
-				if err != nil {
-					return "", err
-				}
-				sys := fi.Sys().(*syscall.Stat_t)
-				gid := int(sys.Gid)
-				_, err = t.userMapper.ScopeUserByIds(-1, gid)
-				if err != nil {
-					return "", err
-				}
-			}
-
 			return spaceID, nil
 		}
 		spaceCandidate = filepath.Dir(spaceCandidate)
@@ -456,6 +441,13 @@ func (t *Tree) assimilate(item scanItem) error {
 			return err
 		}
 	}
+
+	// everything written while assimilating belongs to the space owner, like the files themselves
+	unscope, err := t.scopeSpace(spaceID)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = unscope() }()
 
 	fi, err := os.Lstat(item.Path)
 	if err != nil {
@@ -950,20 +942,30 @@ func (t *Tree) WarmupIDCache(root string, assimilate, onlyDirty bool) error {
 	root = filepath.Clean(root)
 	spaceID := ""
 
-	scopeSpace := func(spaceCandidate string) error {
-		if !t.options.UseSpaceGroups {
+	// act as the owner of the space being walked; switched when the walk enters another space, restored at the end
+	scopedSpaceID := ""
+	var unscope func() error
+	defer func() {
+		if unscope != nil {
+			_ = unscope()
+		}
+	}()
+	scopeSpace := func(spaceID string) error {
+		if !t.options.UseSpaceGroups || spaceID == scopedSpaceID {
 			return nil
 		}
-
-		// set the uid and gid for the space
-		fi, err := os.Stat(spaceCandidate)
+		if unscope != nil {
+			_ = unscope()
+			unscope = nil
+			scopedSpaceID = ""
+		}
+		u, err := t.scopeSpace(spaceID)
 		if err != nil {
 			return err
 		}
-		sys := fi.Sys().(*syscall.Stat_t)
-		gid := int(sys.Gid)
-		_, err = t.userMapper.ScopeUserByIds(-1, gid)
-		return err
+		unscope = u
+		scopedSpaceID = spaceID
+		return nil
 	}
 
 	sizes := make(map[string]int64)
@@ -1026,7 +1028,7 @@ func (t *Tree) WarmupIDCache(root string, assimilate, onlyDirty bool) error {
 			if len(nodeSpaceID) > 0 {
 				spaceID = nodeSpaceID
 
-				err = scopeSpace(path)
+				err = scopeSpace(spaceID)
 				if err != nil {
 					return err
 				}
@@ -1036,7 +1038,7 @@ func (t *Tree) WarmupIDCache(root string, assimilate, onlyDirty bool) error {
 				for strings.HasPrefix(spaceCandidate, t.options.Root) {
 					spaceID, _, err = t.lookup.IDsForPath(context.Background(), spaceCandidate)
 					if err == nil && len(spaceID) > 0 {
-						err = scopeSpace(path)
+						err = scopeSpace(spaceID)
 						if err != nil {
 							return err
 						}
@@ -1045,7 +1047,7 @@ func (t *Tree) WarmupIDCache(root string, assimilate, onlyDirty bool) error {
 
 					spaceID, _, _, _, err = t.lookup.MetadataBackend().IdentifyPath(context.Background(), spaceCandidate)
 					if err == nil && len(spaceID) > 0 {
-						err = scopeSpace(path)
+						err = scopeSpace(spaceID)
 						if err != nil {
 							return err
 						}

@@ -29,6 +29,7 @@ import (
 type Options struct {
 	decomposedoptions.Options
 
+	// acting as the space's group; implied by use_space_owner, which also acts as its uid
 	UseSpaceGroups bool `mapstructure:"use_space_groups"`
 
 	ScanDebounceDelay time.Duration `mapstructure:"scan_debounce_delay"`
@@ -91,6 +92,11 @@ func New(m map[string]interface{}) (*Options, error) {
 		return nil, err
 	}
 	o.Options = *do
+
+	// acting as the owner includes acting as the owner's group
+	if o.UseSpaceOwner {
+		o.UseSpaceGroups = true
+	}
 
 	return o, nil
 }

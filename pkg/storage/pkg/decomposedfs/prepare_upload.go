@@ -130,9 +130,9 @@ func (fs *Decomposedfs) PrepareUpload(ctx context.Context, ref *provider.Referen
 		return nil, err
 	}
 
-	// scope to space owner GID for posix deployments; no-op with NullMapper
+	// scope to the space owner's gid, and uid with use_space_owner, for posix deployments; no-op with NullMapper
 	if spaceGID, ok := ctx.Value(CtxKeySpaceGID).(uint32); ok {
-		unscope, err := fs.um.ScopeUserByIds(-1, int(spaceGID))
+		unscope, err := fs.um.ScopeUserByIds(SpaceUIDFromContext(ctx), int(spaceGID))
 		if err != nil {
 			return nil, errors.Wrap(err, "failed to scope user")
 		}
