@@ -103,7 +103,14 @@ func (fs *Decomposedfs) CreateStorageSpace(ctx context.Context, req *provider.Cr
 	adopted := false
 	if rootPath != "" {
 		if _, err := os.Stat(rootPath); err == nil {
-			if !fs.o.AdoptExistingSpaceRoots || fs.spaceRootHasMetadata(ctx, rootPath) {
+			if !fs.o.AdoptExistingSpaceRoots {
+				return nil, errtypes.AlreadyExists("decomposedfs: spaces: space already exists")
+			}
+			if existing, _, _, _, err := fs.lu.MetadataBackend().IdentifyPath(ctx, rootPath); err == nil && existing != "" {
+				// a crash between the root's metadata and the indexes leaves a space nobody can list; finish the job
+				if err := fs.relinkSpace(ctx, existing, rootPath, req); err != nil {
+					return nil, err
+				}
 				return nil, errtypes.AlreadyExists("decomposedfs: spaces: space already exists")
 			}
 			adopted = true
@@ -1381,6 +1388,19 @@ func canDeleteSpace(ctx context.Context, spaceID string, typ string, purge bool,
 func (fs *Decomposedfs) spaceRootHasMetadata(ctx context.Context, path string) bool {
 	spaceID, _, _, _, err := fs.lu.MetadataBackend().IdentifyPath(ctx, path)
 	return err == nil && len(spaceID) > 0
+}
+
+// relinkSpace makes an existing space root known again: the id cache and the owner and type indexes are idempotent
+func (fs *Decomposedfs) relinkSpace(ctx context.Context, spaceID, rootPath string, req *provider.CreateStorageSpaceRequest) error {
+	if c, ok := fs.lu.(node.IDCacher); ok {
+		if err := c.CacheID(ctx, spaceID, spaceID, rootPath); err != nil {
+			return err
+		}
+	}
+	return fs.updateIndexes(ctx, &provider.Grantee{
+		Type: provider.GranteeType_GRANTEE_TYPE_USER,
+		Id:   &provider.Grantee_UserId{UserId: req.GetOwner().GetId()},
+	}, req.Type, spaceID, spaceID)
 }
 
 // scopeToPath switches the calling goroutine to the uid and gid that own path until the returned function runs

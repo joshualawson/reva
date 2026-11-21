@@ -12,9 +12,11 @@ import (
 	"testing"
 
 	userpb "github.com/cs3org/go-cs3apis/cs3/identity/user/v1beta1"
+	providerv1beta1 "github.com/cs3org/go-cs3apis/cs3/storage/provider/v1beta1"
 	"github.com/pkg/xattr"
 	"github.com/stretchr/testify/require"
 
+	"github.com/opencloud-eu/reva/v3/pkg/errtypes"
 	posixhelpers "github.com/opencloud-eu/reva/v3/pkg/storage/fs/posix/testhelpers"
 )
 
@@ -77,4 +79,35 @@ func TestAdoptExistingHome_IgnoresEmptyCachedID(t *testing.T) {
 	id, err := env.Lookup.GenerateSpaceID("personal", &other)
 	require.NoError(t, err)
 	require.NotEmpty(t, id, "an empty cached id is not a space id")
+}
+
+// metadata on the root but no index entries is what a crash mid-creation leaves; creating again must repair it
+func TestAdoptExistingHome_RelinksAnIndexlessRoot(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("adoption with use_space_owner needs root (setfsuid)")
+	}
+	root := t.TempDir()
+	home := filepath.Join(root, "users", "username")
+	require.NoError(t, os.MkdirAll(home, 0770))
+	chownTree(t, home, ownerUID, ownerGID)
+	env, err := posixhelpers.NewTestEnv(map[string]any{"root": root, "use_space_owner": true, "adopt_existing_space_roots": true})
+	require.NoError(t, err)
+	t.Cleanup(env.Cleanup)
+	spaceID := env.SpaceRootRes.SpaceId
+
+	stale, err := filepath.Glob(filepath.Join(root, "indexes", "*", "*.mpk"))
+	require.NoError(t, err)
+	require.NotEmpty(t, stale)
+	for _, f := range stale {
+		require.NoError(t, os.Remove(f))
+	}
+	_, err = env.Fs.CreateStorageSpace(env.Ctx, &providerv1beta1.CreateStorageSpaceRequest{Owner: env.Owner, Type: "personal", Name: "username"})
+	require.ErrorAs(t, err, new(errtypes.AlreadyExists), "the space exists already")
+	entries, err := filepath.Glob(filepath.Join(root, "indexes", "by-type", "personal.mpk"))
+	require.NoError(t, err)
+	require.Len(t, entries, 1, "the type index is back")
+	byUser, err := filepath.Glob(filepath.Join(root, "indexes", "by-user-id", "*.mpk"))
+	require.NoError(t, err)
+	require.Len(t, byUser, 1, "the owner index is back")
+	_ = spaceID
 }
