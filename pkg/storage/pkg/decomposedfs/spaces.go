@@ -83,6 +83,10 @@ func (fs *Decomposedfs) CreateStorageSpace(ctx context.Context, req *provider.Cr
 	if reqSpaceID := utils.ReadPlainFromOpaque(req.Opaque, "spaceid"); reqSpaceID != "" {
 		spaceID = reqSpaceID
 	}
+	// an empty id would make every lookup below address the nodes directory itself
+	if spaceID == "" {
+		spaceID = uuid.New().String()
+	}
 
 	// Check if space already exists
 	rootPath := ""

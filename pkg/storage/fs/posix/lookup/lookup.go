@@ -478,9 +478,9 @@ func (lu *Lookup) GenerateSpaceID(spaceType string, owner *user.User) (string, e
 		relPath := templates.WithUser(owner, lu.Options.PersonalSpacePathTemplate)
 		path := filepath.Join(lu.Options.Root, relPath)
 
-		// do we already know about this space?
+		// do we already know about this space? the scanner may have cached the path with no id before it was a space
 		spaceID, _, err := lu.IDsForPath(context.TODO(), path)
-		if err != nil {
+		if err != nil || spaceID == "" {
 			// check if the space exists on disk incl. attributes
 			spaceID, _, _, _, err := lu.metadataBackend.IdentifyPath(context.TODO(), path)
 			if err != nil {
