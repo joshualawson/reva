@@ -5,6 +5,7 @@
 package posix_test
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -47,6 +48,14 @@ func TestAdoptExistingHome(t *testing.T) {
 	require.EqualValues(t, ownerUID, fi.Sys().(*syscall.Stat_t).Uid, "adoption leaves the home with its owner")
 	_, err = os.Stat(filepath.Join(home, "existing.txt"))
 	require.NoError(t, err, "what was in the home stays")
+	// the storage-wide indexes are written in the base scope, never as the space owner
+	require.NoError(t, filepath.WalkDir(filepath.Join(root, "indexes"), func(p string, d fs.DirEntry, err error) error {
+		require.NoError(t, err)
+		fi, err := os.Lstat(p)
+		require.NoError(t, err)
+		require.EqualValues(t, 0, fi.Sys().(*syscall.Stat_t).Uid, "%s must belong to the service user", p)
+		return nil
+	}))
 }
 
 // the scanner records a home it cannot place in a space with empty ids; that must not become the space id

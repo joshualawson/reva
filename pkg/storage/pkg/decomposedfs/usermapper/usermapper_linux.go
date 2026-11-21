@@ -62,7 +62,8 @@ func (um *UnixMapper) RunInBaseScope(f func() error) error {
 
 // ScopeBase returns to the base uid and gid returning a function that can be used to restore the previous scope
 func (um *UnixMapper) ScopeBase() (func() error, error) {
-	return um.ScopeUserByIds(-1, um.baseGid)
+	// use_space_owner scopes the uid as well, so the base scope must restore both
+	return um.ScopeUserByIds(um.baseUid, um.baseGid)
 }
 
 // ScopeUser returns to the base uid and gid returning a function that can be used to restore the previous scope

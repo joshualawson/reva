@@ -19,6 +19,7 @@ type Index struct {
 	root  string
 	name  string
 	cache mtimesyncedcache.Cache[string, map[string]string]
+	run   func(func() error) error
 }
 
 type readWriteCloseSeekTruncater interface {
@@ -32,7 +33,14 @@ func New(root, name string) *Index {
 	return &Index{
 		root: root,
 		name: name,
+		run:  func(f func() error) error { return f() },
 	}
+}
+
+// RunVia makes every index operation go through r, e.g. the user mapper's base scope: the indexes are
+// storage-wide and belong to the service user, while the caller may be scoped to a space owner.
+func (i *Index) RunVia(r func(func() error) error) {
+	i.run = r
 }
 
 // Init initializes the index and makes sure it can be used
@@ -42,7 +50,12 @@ func (i *Index) Init() error {
 }
 
 // Load returns the content of an index
-func (i *Index) Load(index string) (map[string]string, error) {
+func (i *Index) Load(index string) (res map[string]string, err error) {
+	err = i.run(func() error { res, err = i.load(index); return err })
+	return res, err
+}
+
+func (i *Index) load(index string) (map[string]string, error) {
 	indexPath := filepath.Join(i.root, i.name, index+".mpk")
 	fi, err := os.Stat(indexPath)
 	if err != nil {
@@ -52,7 +65,12 @@ func (i *Index) Load(index string) (map[string]string, error) {
 }
 
 // Indexes returns the names of the indexes, sorted, e.g. the space types of an index by type.
-func (i *Index) Indexes() ([]string, error) {
+func (i *Index) Indexes() (res []string, err error) {
+	err = i.run(func() error { res, err = i.indexes(); return err })
+	return res, err
+}
+
+func (i *Index) indexes() ([]string, error) {
 	entries, err := os.ReadDir(filepath.Join(i.root, i.name))
 	if err != nil {
 		return nil, err
@@ -84,6 +102,10 @@ func (i *Index) Remove(index, key string) error {
 }
 
 func (i *Index) updateIndex(index string, addLinks map[string]string, removeLinks []string) error {
+	return i.run(func() error { return i.doUpdateIndex(index, addLinks, removeLinks) })
+}
+
+func (i *Index) doUpdateIndex(index string, addLinks map[string]string, removeLinks []string) error {
 	indexPath := filepath.Join(i.root, i.name, index+".mpk")
 
 	var err error

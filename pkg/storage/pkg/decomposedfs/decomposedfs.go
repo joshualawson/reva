@@ -240,6 +240,12 @@ func New(o *options.Options, aspects aspects.Aspects, log *zerolog.Logger) (stor
 	if err != nil {
 		return nil, err
 	}
+	// with use_space_owner the caller is scoped to a space owner, who must not own or be denied the shared indexes
+	if aspects.UserMapper != nil {
+		for _, idx := range []*spaceidindex.Index{userSpaceIndex, groupSpaceIndex, mailSpaceIndex, spaceTypeIndex} {
+			idx.RunVia(aspects.UserMapper.RunInBaseScope)
+		}
+	}
 
 	if aspects.Trashbin == nil {
 		return nil, errors.New("need trashbin")
