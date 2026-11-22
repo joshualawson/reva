@@ -90,10 +90,18 @@ func (fs *Decomposedfs) CreateStorageSpace(ctx context.Context, req *provider.Cr
 
 	// Check if space already exists
 	rootPath := ""
+	fallback := false
 	switch req.Type {
 	case _spaceTypePersonal:
 		if fs.o.PersonalSpacePathTemplate != "" {
 			rootPath = filepath.Join(fs.o.Root, templates.WithUser(u, fs.o.PersonalSpacePathTemplate))
+			// with a fallback the primary location only adopts: a user without a directory there never gets one
+			if fs.o.PersonalSpaceFallbackPathTemplate != "" {
+				if _, err := os.Stat(rootPath); os.IsNotExist(err) {
+					rootPath = filepath.Join(fs.o.Root, templates.WithUser(u, fs.o.PersonalSpaceFallbackPathTemplate))
+					fallback = true
+				}
+			}
 		}
 	default:
 		if fs.o.GeneralSpacePathTemplate != "" {
@@ -157,9 +165,13 @@ func (fs *Decomposedfs) CreateStorageSpace(ctx context.Context, req *provider.Cr
 			}
 			return nil, errors.Wrap(err, fmt.Sprintf("Decomposedfs: error creating space %s", rootPath))
 		}
-		// a brand new root belongs to its owner, like a home directory created by useradd
-		if fs.o.UseSpaceOwner && req.GetOwner().GetUidNumber() > 0 {
-			if err := os.Lchown(rootPath, int(req.GetOwner().GetUidNumber()), int(req.GetOwner().GetGidNumber())); err != nil {
+		// a brand new root belongs to its owner, like a home directory created by useradd; fallback spaces share one identity
+		uid, gid := int(req.GetOwner().GetUidNumber()), int(req.GetOwner().GetGidNumber())
+		if fallback {
+			uid, gid = fs.o.FallbackUID, fs.o.FallbackGID
+		}
+		if fs.o.UseSpaceOwner && uid > 0 {
+			if err := os.Lchown(rootPath, uid, gid); err != nil {
 				return nil, errors.Wrap(err, fmt.Sprintf("Decomposedfs: error setting the owner of space %s", rootPath))
 			}
 		}

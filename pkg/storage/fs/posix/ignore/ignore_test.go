@@ -1,6 +1,7 @@
 package ignore_test
 
 import (
+	"os"
 	"path/filepath"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -62,4 +63,61 @@ var _ = Describe("Ignore", func() {
 		Entry("does not match trash substring matches", filepath.Join("/storage", "users", "user1", lookup.TrashDir+"a"), false),
 	)
 
+	Describe("IsIgnoredDir", func() {
+		var (
+			root    string
+			ignorer *ignore.Ignorer
+		)
+		BeforeEach(func() {
+			root = GinkgoT().TempDir()
+			ignorer = ignore.NewIgnorer(&options.Options{
+				Options: decomposedoptions.Options{
+					Root:                              root,
+					PersonalSpacePathTemplate:         "users/{{.User.Username}}",
+					PersonalSpaceFallbackPathTemplate: "cloud/{{.User.Username}}",
+					GeneralSpacePathTemplate:          "spaces/{{.Space.Id.OpaqueId}}",
+					UploadDirectory:                   filepath.Join(root, "uploads"),
+				},
+				IgnoredDirPatterns: []string{".*", "@Recycle"},
+			}, &logger)
+			for _, dir := range []string{"users/user1/.Trash-1000/files", "users/user1/docs/.git/objects", "users/user1/docs", "users/@Recycle", "cloud/troy"} {
+				Expect(os.MkdirAll(filepath.Join(root, dir), 0700)).To(Succeed())
+			}
+			Expect(os.WriteFile(filepath.Join(root, "users/user1/docs/.hidden-file"), []byte("x"), 0600)).To(Succeed())
+		})
+
+		It("matches a directory at the top of a space", func() {
+			Expect(ignorer.IsIgnoredDir(filepath.Join(root, "users/user1/.Trash-1000"))).To(BeTrue())
+			Expect(ignorer.IsIgnored(filepath.Join(root, "users/user1/.Trash-1000/files/a.txt"))).To(BeTrue())
+		})
+
+		It("matches a directory at any depth", func() {
+			Expect(ignorer.IsIgnoredDir(filepath.Join(root, "users/user1/docs/.git"))).To(BeTrue())
+			Expect(ignorer.IsIgnoredDir(filepath.Join(root, "users/user1/docs/.git/objects/ab"))).To(BeTrue())
+			Expect(ignorer.IsIgnoredDir(filepath.Join(root, "users/@Recycle/anything"))).To(BeTrue())
+		})
+
+		It("leaves files alone, even hidden ones", func() {
+			Expect(ignorer.IsIgnoredDir(filepath.Join(root, "users/user1/docs/.hidden-file"))).To(BeFalse())
+			Expect(ignorer.IsIgnoredDir(filepath.Join(root, "users/user1/docs/.not-there-yet"))).To(BeFalse())
+			Expect(ignorer.IsIgnoredDir(filepath.Join(root, "users/user1/docs"))).To(BeFalse())
+		})
+
+		It("only matches whole names below the root", func() {
+			Expect(ignorer.IsIgnoredDir(filepath.Join(root, "users/user1/docs/my@Recycle"))).To(BeFalse())
+			Expect(ignorer.IsIgnoredDir("/elsewhere/.git")).To(BeFalse())
+		})
+
+		It("is off without patterns", func() {
+			plain := ignore.NewIgnorer(&options.Options{Options: decomposedoptions.Options{Root: root}}, &logger)
+			Expect(plain.IsIgnoredDir(filepath.Join(root, "users/user1/.Trash-1000"))).To(BeFalse())
+		})
+
+		It("treats the fallback personal spaces root like the others", func() {
+			Expect(ignorer.IsRootPath(filepath.Join(root, "cloud"))).To(BeTrue())
+			Expect(ignorer.IsSpaceRoot(filepath.Join(root, "cloud/troy"))).To(BeTrue())
+			Expect(ignorer.IsMetadata(filepath.Join(root, "cloud/troy", lookup.MetadataDir, "a"))).To(BeTrue())
+			Expect(ignorer.IsPurging(filepath.Join(root, "cloud", lookup.PurgeDirPrefix+"troy-x", "a"))).To(BeTrue())
+		})
+	})
 })

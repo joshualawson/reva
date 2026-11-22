@@ -19,6 +19,7 @@
 package options
 
 import (
+	"path/filepath"
 	"time"
 
 	"github.com/go-viper/mapstructure/v2"
@@ -39,6 +40,9 @@ type Options struct {
 	// a copy of the current version of a file is kept available for generating
 	// a revision when the file is changed.
 	EnableFSRevisions bool `mapstructure:"enable_fs_revisions"`
+
+	// glob patterns for directory names (at any depth) that are neither scanned, watched nor listed, e.g. ".*" or "@Recycle"
+	IgnoredDirPatterns []string `mapstructure:"ignored_dir_patterns"`
 
 	ScanFS                   bool   `mapstructure:"scan_fs"`
 	WatchFS                  bool   `mapstructure:"watch_fs"`
@@ -109,6 +113,12 @@ func New(m map[string]interface{}) (*Options, error) {
 		return nil, err
 	}
 	o.Options = *do
+
+	for _, pattern := range o.IgnoredDirPatterns {
+		if _, err := filepath.Match(pattern, ""); err != nil {
+			return nil, errors.Wrapf(err, "invalid ignored_dir_patterns entry %q", pattern)
+		}
+	}
 
 	// acting as the owner includes acting as the owner's group
 	if o.UseSpaceOwner {

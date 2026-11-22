@@ -1,7 +1,9 @@
 package ignore
 
 import (
+	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/opencloud-eu/reva/v3/pkg/storage/fs/posix/blobstore"
@@ -24,25 +26,34 @@ type needle string
 
 // Ignorer handles checking if paths should be ignored in posix operations
 type Ignorer struct {
-	options            *options.Options
-	log                *zerolog.Logger
-	personalSpacesRoot string
-	projectSpacesRoot  string
+	options *options.Options
+	log     *zerolog.Logger
+	root    string
+	// the directories whose children are space roots: personal, project and, when configured, fallback personal
+	spacesRoots []string
 }
 
 // NewIgnorer creates a new Ignorer given the posix options and logger
 func NewIgnorer(options *options.Options, log *zerolog.Logger) *Ignorer {
-	return &Ignorer{
-		options:            options,
-		log:                log,
-		personalSpacesRoot: filepath.Clean(filepath.Join(options.Root, templates.Base(options.PersonalSpacePathTemplate))),
-		projectSpacesRoot:  filepath.Clean(filepath.Join(options.Root, templates.Base(options.GeneralSpacePathTemplate))),
+	i := &Ignorer{
+		options: options,
+		log:     log,
+		root:    filepath.Clean(options.Root),
+		spacesRoots: []string{
+			filepath.Clean(filepath.Join(options.Root, templates.Base(options.PersonalSpacePathTemplate))),
+			filepath.Clean(filepath.Join(options.Root, templates.Base(options.GeneralSpacePathTemplate))),
+		},
 	}
+	if options.PersonalSpaceFallbackPathTemplate != "" {
+		i.spacesRoots = append(i.spacesRoots, filepath.Clean(filepath.Join(options.Root, templates.Base(options.PersonalSpaceFallbackPathTemplate))))
+	}
+	return i
 }
 
 // IsIgnored checking if paths should be ignored in posix operations
 func (i *Ignorer) IsIgnored(path string) bool {
-	return i.IsChanges(path) ||
+	return i.IsIgnoredDir(path) ||
+		i.IsChanges(path) ||
 		i.IsIndex(path) ||
 		IsLockFile(path) ||
 		i.IsTrash(path) ||
@@ -67,19 +78,51 @@ func (i *Ignorer) IsUpload(path string) bool {
 }
 
 func (i *Ignorer) IsRootPath(path string) bool {
-	return path == i.options.Root ||
-		path == i.personalSpacesRoot ||
-		path == i.projectSpacesRoot
+	return path == i.root || slices.Contains(i.spacesRoots, path)
 }
 
 func (i *Ignorer) IsSpaceRoot(path string) bool {
-	parent := filepath.Dir(path)
-	return parent == i.personalSpacesRoot || parent == i.projectSpacesRoot
+	return slices.Contains(i.spacesRoots, filepath.Dir(path))
+}
+
+// IsIgnoredDir reports whether path is, or lies below, a directory under the root whose name matches ignored_dir_patterns
+func (i *Ignorer) IsIgnoredDir(path string) bool {
+	if len(i.options.IgnoredDirPatterns) == 0 {
+		return false
+	}
+	rel, ok := strings.CutPrefix(filepath.Clean(path), i.root+string(filepath.Separator))
+	if !ok {
+		return false
+	}
+	segments := strings.Split(rel, string(filepath.Separator))
+	for n, segment := range segments {
+		if !i.MatchesIgnoredDirName(segment) {
+			continue
+		}
+		// a dot-file is still a file: the last segment only counts when it is a directory on disk
+		if n < len(segments)-1 {
+			return true
+		}
+		if fi, err := os.Lstat(path); err == nil && fi.IsDir() {
+			return true
+		}
+	}
+	return false
+}
+
+// MatchesIgnoredDirName reports whether a directory called name is one of the ignored ones
+func (i *Ignorer) MatchesIgnoredDirName(name string) bool {
+	for _, pattern := range i.options.IgnoredDirPatterns {
+		if matched, _ := filepath.Match(pattern, name); matched {
+			return true
+		}
+	}
+	return false
 }
 
 // IsPurging checks if the path lies in a space root that was renamed for purging
 func (i *Ignorer) IsPurging(path string) bool {
-	for _, root := range []string{i.personalSpacesRoot, i.projectSpacesRoot} {
+	for _, root := range i.spacesRoots {
 		if rel, ok := strings.CutPrefix(path, root+string(filepath.Separator)); ok && strings.HasPrefix(rel, lookup.PurgeDirPrefix) {
 			return true
 		}

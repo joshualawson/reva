@@ -365,6 +365,20 @@ var _ = Describe("HybridBackend", func() {
 			Expect(os.IsNotExist(err)).To(BeTrue())
 		})
 
+		It("refuses to lock a node whose metadata directory is unknown instead of locking a relative path", func() {
+			// the id cache can answer "" transiently; the lock must not land in a "locks" directory next to the binary
+			unknown := metadata.NewHybridBackend(1, func(metadata.MetadataNode) string { return "" }, cache.Config{Database: tmpdir})
+			cwd, err := os.Getwd()
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = unknown.Lock(n)
+			Expect(err).To(HaveOccurred())
+			Expect(metadata.IsNotExist(err)).To(BeTrue())
+			Expect(unknown.LockfilePath(n)).To(BeEmpty())
+			_, err = os.Stat(path.Join(cwd, "locks"))
+			Expect(os.IsNotExist(err)).To(BeTrue())
+		})
+
 		It("creates the metadata directories when the space exists", func() {
 			existingSpaceRoot := path.Join(tmpdir, "existing-space")
 			Expect(os.MkdirAll(existingSpaceRoot, 0700)).To(Succeed())

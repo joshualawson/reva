@@ -319,3 +319,32 @@ var _ = Describe("WarmupIDCache", func() {
 		})
 	})
 })
+
+var _ = Describe("WarmupIDCache with ignored_dir_patterns", func() {
+	It("skips matching directories at any depth and leaves hidden files alone", func() {
+		env, err := posixhelpers.NewTestEnv(map[string]interface{}{"ignored_dir_patterns": []string{".*"}})
+		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(env.Cleanup)
+		spaceRoot := filepath.Join(env.Root, "users", "username")
+		project := filepath.Join(spaceRoot, "project")
+		trash := filepath.Join(spaceRoot, ".Trash-1000", "files")
+		cache := filepath.Join(project, ".godot", "imported")
+		Expect(os.MkdirAll(trash, 0755)).To(Succeed())
+		Expect(os.MkdirAll(cache, 0755)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(trash, "junk.txt"), []byte("junk"), 0644)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(cache, "x.scn"), []byte("cache"), 0644)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(project, "keep.txt"), []byte("keep"), 0644)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(project, ".hidden.txt"), []byte("keep"), 0644)).To(Succeed())
+
+		Expect(env.Tree.WarmupIDCache(spaceRoot, true, false)).To(Succeed())
+
+		for _, p := range []string{project, filepath.Join(project, "keep.txt"), filepath.Join(project, ".hidden.txt")} {
+			_, err := xattr.Get(p, "user.oc.id")
+			Expect(err).ToNot(HaveOccurred(), p)
+		}
+		for _, p := range []string{filepath.Dir(trash), trash, filepath.Join(trash, "junk.txt"), filepath.Dir(cache), filepath.Join(cache, "x.scn")} {
+			_, err := xattr.Get(p, "user.oc.id")
+			Expect(err).To(HaveOccurred(), p)
+		}
+	})
+})

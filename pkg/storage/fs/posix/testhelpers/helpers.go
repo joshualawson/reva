@@ -329,6 +329,8 @@ func NewTestEnv(config map[string]interface{}) (*TestEnv, error) {
 		Tree:        tree,
 		Permissions: p,
 		Trashbin:    tb,
+		// as posix.New does, so that space creation and uploads scope to the owner like in production
+		UserMapper: um,
 		// the cleanup the tree created, as in posix.New
 		RevisionsCleanup: tree.RevisionsCleanup(),
 	}

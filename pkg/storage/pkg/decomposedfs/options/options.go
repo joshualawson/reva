@@ -62,6 +62,13 @@ type Options struct {
 	// posix only: adopt an existing directory without space metadata as a new personal space root instead of refusing
 	AdoptExistingSpaceRoots bool `mapstructure:"adopt_existing_space_roots"`
 
+	// posix only: where a personal space is created when its primary path does not exist; the primary template then only adopts
+	PersonalSpaceFallbackPathTemplate string `mapstructure:"personalspacefallbackpath_template"`
+
+	// posix only: the owner of a personal space created under the fallback template, so use_space_owner acts as one known identity for all of them
+	FallbackUID int `mapstructure:"fallback_uid"`
+	FallbackGID int `mapstructure:"fallback_gid"`
+
 	// UserLayout describes the relative path from the storage's root node to the users home node.
 	UserLayout string `mapstructure:"user_layout"`
 

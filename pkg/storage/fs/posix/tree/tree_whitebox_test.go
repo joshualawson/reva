@@ -19,6 +19,7 @@ import (
 	"github.com/opencloud-eu/reva/v3/pkg/errtypes"
 	"github.com/opencloud-eu/reva/v3/pkg/storage/fs/posix/options"
 	"github.com/opencloud-eu/reva/v3/pkg/storage/fs/posix/tree/mocks"
+	"github.com/opencloud-eu/reva/v3/pkg/storage/fs/posix/watcher"
 	"github.com/opencloud-eu/reva/v3/pkg/storage/pkg/decomposedfs/node"
 	decomposedoptions "github.com/opencloud-eu/reva/v3/pkg/storage/pkg/decomposedfs/options"
 )
@@ -34,6 +35,22 @@ type fakePathLookup struct {
 func (f fakePathLookup) InternalPath(_, _ string) string { return f.internalPath }
 
 var _ = Describe("Tree", func() {
+	Describe("Scan", func() {
+		It("drops events below an ignored directory before queueing them", func() {
+			dir := GinkgoT().TempDir()
+			logger := zerolog.Nop()
+			// nothing else is wired: an event that gets past the guard would hit the nil debouncer
+			t := &Tree{log: &logger, options: &options.Options{Options: decomposedoptions.Options{Root: dir}, IgnoredDirPatterns: []string{".*"}}}
+			t.Ignorer = ignore.NewIgnorer(t.options, t.log)
+			trash := filepath.Join(dir, "users", "u", ".Trash-1000")
+			Expect(os.MkdirAll(trash, 0700)).To(Succeed())
+
+			Expect(t.Scan(filepath.Join(trash, "junk.txt"), watcher.ActionCreate, false)).To(Succeed())
+			Expect(t.Scan(trash, watcher.ActionCreate, true)).To(Succeed())
+			Expect(t.Scan(filepath.Join(dir, "users", "u", ".gone"), watcher.ActionDelete, true)).To(Succeed())
+		})
+	})
+
 	Describe("ListFolder", func() {
 		var (
 			ctx        context.Context
@@ -89,6 +106,22 @@ var _ = Describe("Tree", func() {
 
 				Expect(err).To(MatchError(backendErr))
 				Expect(assimilate).To(BeFalse(), "must not assimilate for a non-NotFound error")
+			})
+		})
+
+		When("an entry is a directory matching ignored_dir_patterns", func() {
+			It("is left out without even resolving it", func() {
+				t.options.IgnoredDirPatterns = []string{".*"}
+				Expect(os.Mkdir(filepath.Join(t.options.Root, ".Trash-1000"), 0700)).To(Succeed())
+				// an exact path: the mock fails the spec if the ignored directory is resolved as well
+				resolver.EXPECT().IDsForPath(mock.Anything, filepath.Join(t.options.Root, "entry.txt")).
+					Return("", "", errtypes.NotFound("path not found in cache"))
+				assimilateErr = errors.New("assimilation failed")
+
+				nodes, err := t.ListFolder(ctx, folder)
+
+				Expect(err).ToNot(HaveOccurred())
+				Expect(nodes).To(BeEmpty())
 			})
 		})
 

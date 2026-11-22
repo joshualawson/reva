@@ -214,6 +214,10 @@ func (t *Tree) workScanQueue() {
 
 // Scan scans the given path and updates the id chache
 func (t *Tree) Scan(path string, action watcher.EventAction, isDir bool) error {
+	// nothing below an ignored directory is ever indexed, so its events have nothing to update; a gone one cannot be stat'ed
+	if t.Ignorer.IsIgnoredDir(path) || (isDir && t.Ignorer.MatchesIgnoredDirName(filepath.Base(path))) {
+		return nil
+	}
 	// cases:
 	switch action {
 	case watcher.ActionCreate:
@@ -703,7 +707,15 @@ assimilate:
 		var err error
 		_, parentID, err = t.lookup.IDsForPath(context.Background(), filepath.Dir(path))
 		if err != nil {
-			return nil, nil, fmt.Errorf("failed to read parent id")
+			// a watcher can deliver a child before its parent; register the parent first, once
+			if retries == 0 {
+				return nil, nil, fmt.Errorf("failed to read parent id: %w", err)
+			}
+			if err := t.assimilate(scanItem{Path: filepath.Dir(path)}); err != nil {
+				return nil, nil, errors.Wrap(err, "failed to assimilate the parent first")
+			}
+			retries--
+			goto assimilate
 		}
 		parentAttribs, err := t.lookup.MetadataBackend().All(context.Background(), node.NewBaseNode(spaceID, parentID, t.lookup))
 		if err != nil {
@@ -983,6 +995,12 @@ func (t *Tree) WarmupIDCache(root string, assimilate, onlyDirty bool) error {
 		// skip irrelevant files
 		if t.Ignorer.IsIgnored(path) {
 			switch {
+			case t.Ignorer.IsIgnoredDir(path):
+				// junk like a desktop's trash is never walked, even where a space root would be
+				if info.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
 			case t.Ignorer.IsSpaceRoot(path):
 				// ignore the space root itself, but do not skip the whole tree
 				return nil

@@ -475,31 +475,40 @@ func (lu *Lookup) GenerateSpaceID(spaceType string, owner *user.User) (string, e
 	case _spaceTypeProject:
 		return uuid.New().String(), nil
 	case _spaceTypePersonal:
-		relPath := templates.WithUser(owner, lu.Options.PersonalSpacePathTemplate)
-		path := filepath.Join(lu.Options.Root, relPath)
-
-		// do we already know about this space? the scanner may have cached the path with no id before it was a space
-		spaceID, _, err := lu.IDsForPath(context.TODO(), path)
-		if err != nil || spaceID == "" {
-			// check if the space exists on disk incl. attributes
-			spaceID, _, _, _, err := lu.metadataBackend.IdentifyPath(context.TODO(), path)
-			if err != nil {
-				if metadata.IsNotExist(err) || metadata.IsAttrUnset(err) {
-					return uuid.New().String(), nil
-				} else {
-					return "", err
-				}
-			}
-			// a directory without metadata is not a space yet; CreateStorageSpace decides whether to adopt or refuse it
-			if len(spaceID) == 0 {
-				return uuid.New().String(), nil
-			}
-			return spaceID, nil
+		candidates := []string{filepath.Join(lu.Options.Root, templates.WithUser(owner, lu.Options.PersonalSpacePathTemplate))}
+		if lu.Options.PersonalSpaceFallbackPathTemplate != "" {
+			candidates = append(candidates, filepath.Join(lu.Options.Root, templates.WithUser(owner, lu.Options.PersonalSpaceFallbackPathTemplate)))
 		}
-		return spaceID, nil
+		for _, path := range candidates {
+			spaceID, err := lu.existingSpaceID(path)
+			if err != nil {
+				return "", err
+			}
+			if spaceID != "" {
+				return spaceID, nil
+			}
+		}
+		return uuid.New().String(), nil
 	default:
 		return "", fmt.Errorf("unsupported space type: %s", spaceType)
 	}
+}
+
+// existingSpaceID returns the id of the space rooted at path, or "" when there is no directory or no space there yet
+func (lu *Lookup) existingSpaceID(path string) (string, error) {
+	// the scanner may have cached the path with no id before it was a space
+	if spaceID, _, err := lu.IDsForPath(context.TODO(), path); err == nil && spaceID != "" {
+		return spaceID, nil
+	}
+	spaceID, _, _, _, err := lu.metadataBackend.IdentifyPath(context.TODO(), path)
+	if err != nil {
+		if metadata.IsNotExist(err) || metadata.IsAttrUnset(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	// a directory without metadata is not a space yet; CreateStorageSpace decides whether to adopt or refuse it
+	return spaceID, nil
 }
 
 func (lu *Lookup) PurgeNode(n *node.Node) error {

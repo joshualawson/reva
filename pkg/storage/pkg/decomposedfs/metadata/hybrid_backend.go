@@ -529,11 +529,19 @@ func (b HybridBackend) MetadataPath(n MetadataNode) string {
 	return filepath.Join(base, pathify(n.GetID(), 4, 2)+".mpk")
 }
 
-// LockfilePath returns the path of the lock file
-func (b HybridBackend) LockfilePath(n MetadataNode) string {
-	base := b.metadataPathFunc(n)
+// LocksDir holds the lock files inside a space's metadata directory
+const LocksDir = "locks"
 
-	return filepath.Join(base, "locks", n.GetID()+".mlock")
+// LockfilePath returns the path of the lock file, or "" when the space's metadata directory is unknown
+func (b HybridBackend) LockfilePath(n MetadataNode) string {
+	return b.lockfilePath(b.metadataPathFunc(n), n)
+}
+
+func (b HybridBackend) lockfilePath(base string, n MetadataNode) string {
+	if base == "" {
+		return ""
+	}
+	return filepath.Join(base, LocksDir, n.GetID()+".mlock")
 }
 
 // Lock locks the metadata for the given path
@@ -542,7 +550,12 @@ func (b HybridBackend) Lock(n MetadataNode) (UnlockFunc, error) {
 		return func() error { return nil }, nil
 	}
 
-	metaLockPath := b.LockfilePath(n)
+	// resolved once: an id cache that answers "" now and a path later must not leave a relative "locks" path behind
+	base := b.metadataPathFunc(n)
+	if base == "" {
+		return nil, errors.Wrapf(os.ErrNotExist, "hybrid: the metadata directory of space %s is unknown, cannot lock node %s", n.GetSpaceID(), n.GetID())
+	}
+	metaLockPath := b.lockfilePath(base, n)
 	mlock, err := lockFile(n, metaLockPath, os.O_RDWR|os.O_CREATE, b.metrics)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -551,10 +564,6 @@ func (b HybridBackend) Lock(n MetadataNode) (UnlockFunc, error) {
 			// space's base directory itself: locking a node (i.e. the space
 			// root) whose space has been removed (or has not been created yet)
 			// must not resurrect the spaca.
-			base := b.metadataPathFunc(n)
-			if base == "" {
-				return nil, err
-			}
 			// base is the space's metadata directory (e.g. <spaceRoot>/.oc-nodes).
 			// Create it and the locks directory one level at a time: unlike MkdirAll,
 			// Mkdir fails when the space root is removed concurrently.

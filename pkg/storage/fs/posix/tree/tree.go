@@ -27,6 +27,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -252,23 +253,27 @@ func New(lu node.PathLookup, bs node.Blobstore, um usermapper.Mapper, trashbin *
 }
 
 func (t *Tree) warmupSpaceRootCache(options *options.Options) error {
-	personalRoot := filepath.Clean(filepath.Join(options.Root, templates.Base(options.PersonalSpacePathTemplate)))
-	projectRoot := filepath.Clean(filepath.Join(options.Root, templates.Base(options.GeneralSpacePathTemplate)))
+	spacesRoots := []string{
+		filepath.Clean(filepath.Join(options.Root, templates.Base(options.PersonalSpacePathTemplate))),
+		filepath.Clean(filepath.Join(options.Root, templates.Base(options.GeneralSpacePathTemplate))),
+	}
+	if options.PersonalSpaceFallbackPathTemplate != "" {
+		spacesRoots = append(spacesRoots, filepath.Clean(filepath.Join(options.Root, templates.Base(options.PersonalSpaceFallbackPathTemplate))))
+	}
 
 	var paths []string
-	personalEntries, err := os.ReadDir(personalRoot)
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return errors.Wrap(err, "could not read personal space root directory")
-	}
-	for _, entry := range personalEntries {
-		paths = append(paths, filepath.Join(personalRoot, entry.Name()))
-	}
-	projectEntries, err := os.ReadDir(projectRoot)
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return errors.Wrap(err, "could not read project space root directory")
-	}
-	for _, entry := range projectEntries {
-		paths = append(paths, filepath.Join(projectRoot, entry.Name()))
+	for _, spacesRoot := range spacesRoots {
+		entries, err := os.ReadDir(spacesRoot)
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return errors.Wrapf(err, "could not read the space root directory %s", spacesRoot)
+		}
+		for _, entry := range entries {
+			path := filepath.Join(spacesRoot, entry.Name())
+			if t.Ignorer.IsIgnoredDir(path) {
+				continue
+			}
+			paths = append(paths, path)
+		}
 	}
 
 	for _, path := range paths {
@@ -281,8 +286,45 @@ func (t *Tree) warmupSpaceRootCache(options *options.Options) error {
 		if err != nil {
 			return errors.Wrap(err, "could not cache space root path")
 		}
+		if spaceID != "" && options.UseSpaceOwner {
+			if err := t.EnsureSpaceHousekeeping(path); err != nil {
+				t.log.Error().Err(err).Str("path", path).Msg("could not hand the space's internal directories to its owner")
+			}
+		}
 	}
 	return nil
+}
+
+// EnsureSpaceHousekeeping hands the space's metadata and lock directories to the owner of root, who writes there later
+func (t *Tree) EnsureSpaceHousekeeping(root string) error {
+	fi, err := os.Stat(root)
+	if err != nil {
+		return err
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return errors.New("no unix ownership information for " + root)
+	}
+	uid, gid := int(st.Uid), int(st.Gid)
+	metadataDir := filepath.Join(root, lookup.MetadataDir)
+	for _, dir := range []string{metadataDir, filepath.Join(metadataDir, metadata.LocksDir)} {
+		if err := os.Mkdir(dir, 0700); err != nil && !errors.Is(err, fs.ErrExist) {
+			return err
+		}
+	}
+	return filepath.WalkDir(metadataDir, func(path string, _ fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		fi, err := os.Lstat(path)
+		if err != nil {
+			return err
+		}
+		if st, ok := fi.Sys().(*syscall.Stat_t); ok && (int(st.Uid) != uid || int(st.Gid) != gid) {
+			return os.Lchown(path, uid, gid)
+		}
+		return nil
+	})
 }
 
 func (t *Tree) checkStorage() error {
