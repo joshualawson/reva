@@ -346,12 +346,21 @@ func (t *Tree) HandleFileDelete(path string, sendSSE bool) error {
 		return nil
 	}
 
+	// resolved before the id cache entry goes, as the path-based lock file needs it
+	lockFiles := append(node.New(spaceID, id, "", "", 0, "", provider.ResourceType_RESOURCE_TYPE_INVALID, nil, t.lookup).LockFilePaths(), t.lookup.MetadataBackend().LockfilePath(n), t.tempLockfilePath(spaceID, path))
+
 	// purge metadata
 	if err := t.lookup.IDCache.DeleteByPath(context.Background(), path); err != nil {
 		t.log.Error().Err(err).Str("path", path).Msg("could not delete id cache entry by path")
 	}
 	if err := t.lookup.MetadataBackend().Purge(context.Background(), n); err != nil {
 		t.log.Error().Err(err).Str("path", path).Msg("could not purge metadata")
+	}
+	// lock files are per node id, so without this every out-of-band delete leaves an orphan in the space's locks dir
+	for _, lockFile := range lockFiles {
+		if err := os.Remove(lockFile); err != nil && !os.IsNotExist(err) {
+			t.log.Error().Err(err).Str("path", lockFile).Msg("could not remove lock file")
+		}
 	}
 
 	if err = t.setDirty(filepath.Dir(path), true); err != nil {
@@ -423,6 +432,11 @@ func (t *Tree) generateTempNodeId(path string) string {
 		t.log.Info().Str("path", path).Msg("path too long, using sha256 as lock: " + pathHash)
 		return pathHash
 	}
+}
+
+// tempLockfilePath is the lock file a path was assimilated under before it had an id; nothing else ever removes it
+func (t *Tree) tempLockfilePath(spaceID, path string) string {
+	return t.lookup.MetadataBackend().LockfilePath(&assimilationNode{spaceID: spaceID, nodeId: t.generateTempNodeId(path), path: path})
 }
 
 func (t *Tree) assimilate(item scanItem) error {

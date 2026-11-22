@@ -211,6 +211,18 @@ var _ = Describe("Watching tree", func() {
 					g.Expect(root.GetTreeSize(env.Ctx)).To(Equal(uint64(11)))
 				}).Should(Succeed())
 
+				n, err := env.Lookup.NodeFromResource(env.Ctx, &provider.Reference{
+					ResourceId: env.SpaceRootRes,
+					Path:       subtree + "/deleted.txt",
+				})
+				Expect(err).ToNot(HaveOccurred())
+				tempLockFile := env.Tree.TempLockfilePathForTest(n.SpaceID, root+"/deleted.txt")
+				Expect(tempLockFile).To(BeAnExistingFile())
+				// a change re-assimilates under the real id, which creates the second lock file
+				lockFile := env.Lookup.MetadataBackend().LockfilePath(n)
+				Expect(os.WriteFile(root+"/deleted.txt", []byte("hello world!"), 0600)).To(Succeed())
+				Eventually(lockFile).Should(BeAnExistingFile())
+
 				Expect(os.Remove(root + "/deleted.txt")).To(Succeed())
 
 				Eventually(func(g Gomega) {
@@ -220,6 +232,8 @@ var _ = Describe("Watching tree", func() {
 					})
 					g.Expect(err).ToNot(HaveOccurred())
 					g.Expect(n.Exists).To(BeFalse())
+					g.Expect(lockFile).ToNot(BeAnExistingFile())
+					g.Expect(tempLockFile).ToNot(BeAnExistingFile())
 
 					root, err := env.Lookup.NodeFromResource(env.Ctx, &provider.Reference{
 						ResourceId: env.SpaceRootRes,

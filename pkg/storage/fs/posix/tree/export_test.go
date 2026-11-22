@@ -19,3 +19,8 @@ package tree
 func (t *Tree) AssimilateForTest(path string) error {
 	return t.assimilate(scanItem{Path: path})
 }
+
+// TempLockfilePathForTest exposes the pre-id lock file of a path so tests can assert it is cleaned up.
+func (t *Tree) TempLockfilePathForTest(spaceID, path string) string {
+	return t.tempLockfilePath(spaceID, path)
+}
