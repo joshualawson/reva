@@ -248,6 +248,10 @@ func New(lu node.PathLookup, bs node.Blobstore, um usermapper.Mapper, trashbin *
 		}()
 	}
 
+	if o.LockPruneInterval > 0 {
+		go t.runLockPruner(o.LockPruneInterval)
+	}
+
 	started = true
 	return t, nil
 }

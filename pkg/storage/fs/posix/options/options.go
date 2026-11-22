@@ -44,6 +44,9 @@ type Options struct {
 	// glob patterns for directory names (at any depth) that are neither scanned, watched nor listed, e.g. ".*" or "@Recycle"
 	IgnoredDirPatterns []string `mapstructure:"ignored_dir_patterns"`
 
+	// how often stale lock files are pruned, and how old one must be before it is; 0 disables
+	LockPruneInterval time.Duration `mapstructure:"lock_prune_interval"`
+
 	ScanFS                   bool   `mapstructure:"scan_fs"`
 	WatchFS                  bool   `mapstructure:"watch_fs"`
 	WatchType                string `mapstructure:"watch_type"`
@@ -100,6 +103,9 @@ func New(m map[string]interface{}) (*Options, error) {
 	}
 	if _, ok := m["inotify_stats_frequency"]; !ok {
 		m["inotify_stats_frequency"] = 5 * time.Minute
+	}
+	if _, ok := m["lock_prune_interval"]; !ok {
+		m["lock_prune_interval"] = 24 * time.Hour
 	}
 
 	o := &Options{}
