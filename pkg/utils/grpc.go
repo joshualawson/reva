@@ -53,22 +53,9 @@ func GetServiceUserContextWithContext(ctx context.Context, gwc gateway.GatewayAP
 	return metadata.AppendToOutgoingContext(ctx, ctxpkg.TokenHeader, token), nil
 }
 
-// GetServiceUserToken returns a reva authentication token for the given service user
+// GetServiceUserToken returns a reva authentication token for the given service user, reused until shortly before it expires
 func GetServiceUserToken(ctx context.Context, gwc gateway.GatewayAPIClient, serviceUserID string, serviceUserSecret string) (string, error) {
-	authRes, err := gwc.Authenticate(ctx, &gateway.AuthenticateRequest{
-		Type:         "serviceaccounts",
-		ClientId:     serviceUserID,
-		ClientSecret: serviceUserSecret,
-	})
-	if err != nil {
-		return "", err
-	}
-
-	if err := checkStatusCode("authenticating service user", authRes.GetStatus().GetMessage(), authRes.GetStatus().GetCode()); err != nil {
-		return "", err
-	}
-
-	return authRes.Token, nil
+	return serviceTokens.get(ctx, gwc, serviceUserID, serviceUserSecret)
 }
 
 // GetUser gets the specified user
